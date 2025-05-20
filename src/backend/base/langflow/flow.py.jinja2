@@ -1,0 +1,32 @@
+import json  
+from typing import Any, Dict, Optional  
+from langflow.graph.graph.base import Graph  
+  
+# The flow data is stored as a JSON string to avoid any issues with serialization  
+FLOW_DATA = """{{ flow_data | tojson }}"""  
+  
+class FlowExecutor:  
+    def __init__(self):  
+        self.graph = None  
+        self.initialize_graph()  
+      
+    def initialize_graph(self):  
+        flow_data = json.loads(FLOW_DATA)  
+        self.graph = Graph.from_payload(flow_data)  
+      
+    async def execute(  
+        self,  
+        input_value: Optional[str] = None,  
+        input_type: str = "chat",  
+        tweaks: Dict[str, Any] = {}  
+    ) -> Any:  
+        # Process the flow with the given inputs  
+        result = await self.graph.execute(  
+            input_value=input_value,  
+            input_type=input_type,  
+            tweaks=tweaks  
+        )  
+        return result  
+  
+def create_flow_executor():  
+    return FlowExecutor()

@@ -1,0 +1,36 @@
+from fastapi import FastAPI, HTTPException, Depends  
+from pydantic import BaseModel  
+from typing import Any, Dict, Optional  
+from .flow import create_flow_executor  
+  
+app = FastAPI(  
+    title="{{ flow_name }} API",  
+    description="{{ flow_description }}",  
+    version="1.0.0"  
+)  
+  
+flow_executor = create_flow_executor()  
+  
+class FlowRequest(BaseModel):  
+    input_value: Optional[str] = None  
+    input_type: str = "chat"  
+    tweaks: Dict[str, Any] = {}  
+  
+class FlowResponse(BaseModel):  
+    result: Any  
+  
+@app.post("/run", response_model=FlowResponse)  
+async def run_flow(request: FlowRequest):  
+    try:  
+        result = await flow_executor.execute(  
+            input_value=request.input_value,  
+            input_type=request.input_type,   
+            tweaks=request.tweaks  
+        )  
+        return FlowResponse(result=result)  
+    except Exception as e:  
+        raise HTTPException(status_code=500, detail=str(e))  
+  
+@app.get("/health")  
+async def health_check():  
+    return {"status": "healthy"}
