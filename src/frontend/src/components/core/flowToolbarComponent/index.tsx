@@ -10,6 +10,8 @@ import { useStoreStore } from "../../../stores/storeStore";
 import { classNames, cn, isThereModal } from "../../../utils/utils";
 import ForwardedIconComponent from "../../common/genericIconComponent";
 import FlowToolbarOptions from "./components/flow-toolbar-options";
+import DeployButton from "./components/deploy-button";  
+
 
 const FlowToolbar = memo(function FlowToolbar(): JSX.Element {
   const preventDefault = true;

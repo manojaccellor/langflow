@@ -2,6 +2,8 @@ import useFlowStore from "@/stores/flowStore";
 import { useState } from "react";
 import PublishDropdown from "./deploy-dropdown";
 import PlaygroundButton from "./playground-button";
+import DeployButton from "./deploy-button";
+
 
 export default function FlowToolbarOptions() {
   const [open, setOpen] = useState<boolean>(false);
@@ -18,6 +20,7 @@ export default function FlowToolbarOptions() {
         />
       </div>
       <PublishDropdown />
+      <DeployButton />  
     </div>
   );
 }
