@@ -13,7 +13,7 @@ from uuid import UUID
 import orjson
 from aiofile import async_open
 from anyio import Path
-from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, Request, Body
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from fastapi_pagination import Page, Params
@@ -574,6 +574,7 @@ async def deploy_flow(
     flow_id: UUID,
     current_user: CurrentActiveUser,
     session: DbSession,
+    request_body: dict = Body(default={}),
 ):
     """Deploy a flow as a FastAPI application."""
     try:

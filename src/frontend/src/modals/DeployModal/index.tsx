@@ -43,7 +43,7 @@ export default function DeployModal({
     setIsDeploying(true);
     try {
       // Use the correct endpoint from endpoints.py
-      const response = await api.post(`/api/v1/flows/${flowId}/deploy`, {});
+      const response = await api.post(`/v1/flows/${flowId}/deploy`, {});
 
       // For the file download response, we need to handle it differently
       if (response.headers['content-type']?.includes('application/zip')) {
