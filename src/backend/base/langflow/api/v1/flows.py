@@ -4,6 +4,8 @@ import io
 import json
 import re
 import zipfile
+import tempfile
+import os
 from datetime import datetime, timezone
 from typing import Annotated
 from uuid import UUID
@@ -11,7 +13,7 @@ from uuid import UUID
 import orjson
 from aiofile import async_open
 from anyio import Path
-from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from fastapi_pagination import Page, Params
@@ -32,6 +34,7 @@ from langflow.services.database.models.folder.model import Folder
 from langflow.services.deps import get_settings_service
 from langflow.services.settings.service import SettingsService
 from langflow.utils.compression import compress_response
+from langflow.utils.deployment import generate_fastapi_app
 
 # build router
 router = APIRouter(prefix="/flows", tags=["Flows"])
@@ -564,3 +567,50 @@ async def read_basic_examples(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.post("/{flow_id}/deploy", status_code=200)
+async def deploy_flow(
+    flow_id: UUID,
+    current_user: CurrentActiveUser,
+    session: DbSession,
+):
+    """Deploy a flow as a FastAPI application."""
+    try:
+        # Get the flow
+        flow = await _read_flow(
+            session=session,
+            flow_id=flow_id,
+            user_id=current_user.id,
+            settings_service=get_settings_service(),
+        )
+        
+        if not flow:
+            raise HTTPException(status_code=404, detail="Flow not found")
+            
+        # Generate the FastAPI app
+        deploy_dir = await generate_fastapi_app(flow)
+        
+        # Create a zip file of the deployment directory
+        zip_path = Path(tempfile.gettempdir()) / f"{flow.id}_fastapi_app.zip"
+        
+        with zipfile.ZipFile(zip_path, 'w') as zipf:
+            for root, _, files in os.walk(deploy_dir["deploy_dir"]):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    zipf.write(
+                        file_path, 
+                        os.path.relpath(file_path, deploy_dir["deploy_dir"])
+                    )
+        
+        # Return the zip file as a download
+        return StreamingResponse(
+            open(zip_path, "rb"),
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f"attachment; filename={flow.id}_fastapi_app.zip"
+            }
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

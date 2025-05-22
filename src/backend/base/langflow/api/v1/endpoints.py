@@ -10,10 +10,14 @@ from uuid import UUID
 import sqlalchemy as sa
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Request, UploadFile, status
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from loguru import logger
 from sqlmodel import select
-
+import tempfile
+import shutil
+import json
+import os
+from langflow.utils.deploy import generate_fastapi_app, create_zip_file
 from langflow.api.utils import CurrentActiveUser, DbSession, parse_value
 from langflow.api.v1.schemas import (
     ConfigResponse,
@@ -756,3 +760,43 @@ async def get_config():
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/flows/{flow_id}/deploy", status_code=status.HTTP_200_OK)
+async def deploy_flow(
+    flow: Annotated[Flow, Depends(get_flow_by_id_or_endpoint_name)],
+    user: CurrentActiveUser,
+):
+    """Deploy a flow as a standalone FastAPI application.
+
+    This endpoint generates a deployable FastAPI application from a flow.
+
+    Args:
+        flow (Flow): The flow to deploy
+        user (User): The authenticated user
+
+    Returns:
+        dict: A dictionary containing the path to the deployed application
+
+    Raises:
+        HTTPException: If there is an error deploying the flow
+    """
+    try:
+        # Create a temporary directory for the deployment
+        temp_dir = tempfile.mkdtemp()
+
+        # Generate the FastAPI application
+        app_path = generate_fastapi_app(flow, temp_dir)
+
+        # Create a zip file of the application
+        zip_path = create_zip_file(app_path)
+
+        # Return the download URL for the zip file
+        return FileResponse(path=zip_path, filename=f"{flow.name}_fastapi_app.zip", media_type="application/zip")
+    except Exception as exc:
+        # Clean up the temporary directory in case of error
+        if "temp_dir" in locals():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error deploying flow: {str(exc)}"
+        ) from exc
