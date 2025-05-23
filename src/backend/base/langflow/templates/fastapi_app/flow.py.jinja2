@@ -1,0 +1,83 @@
+"""
+Flow definition module
+Generated from Langflow
+"""
+
+import json
+import asyncio
+from typing import Dict, Any, Optional, List
+from langflow.graph.graph.base import Graph
+
+# The flow data as JSON
+FLOW_DATA = {{ flow_data }}
+
+def load_flow_from_json():
+    """Load the flow from the JSON data."""
+    try:
+        # Create a Graph object from the flow data
+        graph = Graph.from_payload(FLOW_DATA)
+        return FlowProcessor(graph)
+    except Exception as e:
+        raise ValueError(f"Failed to load flow: {str(e)}")
+
+class FlowProcessor:
+    """Process the flow with various inputs and handle streaming."""
+    
+    def __init__(self, graph: Graph):
+        """Initialize with a Graph object."""
+        self.graph = graph
+        self.sessions = {}
+    
+    async def process(self, input_value: str, input_type: str = "text", 
+                     tweaks: Dict[str, Any] = None, session_id: str = None) -> Dict[str, Any]:
+        """Process the flow with the given input."""
+        try:
+            # Process tweaks if provided
+            if tweaks:
+                self.graph.update_tweaks(tweaks)
+            
+            # Run the graph
+            result = await self.graph.arun(
+                input_value=input_value,
+                input_type=input_type,
+                session_id=session_id
+            )
+            
+            # Store session if provided
+            if session_id:
+                self.sessions[session_id] = self.graph.get_session_data(session_id)
+            
+            return {"result": result, "session_id": session_id}
+        except Exception as e:
+            raise ValueError(f"Error processing flow: {str(e)}")
+    
+    async def process_stream(self, queue: asyncio.Queue, input_value: str, 
+                           input_type: str = "text", tweaks: Dict[str, Any] = None, 
+                           session_id: str = None) -> None:
+        """Process the flow with streaming output to a queue."""
+        try:
+            # Process tweaks if provided
+            if tweaks:
+                self.graph.update_tweaks(tweaks)
+            
+            # Set up streaming callback
+            async def stream_callback(data: Dict[str, Any]):
+                await queue.put(data)
+            
+            # Run the graph with streaming
+            await self.graph.astream(
+                input_value=input_value,
+                input_type=input_type,
+                session_id=session_id,
+                stream_callback=stream_callback
+            )
+            
+            # Store session if provided
+            if session_id:
+                self.sessions[session_id] = self.graph.get_session_data(session_id)
+            
+            # Signal end of stream
+            await queue.put(None)
+        except Exception as e:
+            await queue.put({"error": str(e)})
+            await queue.put(None) 

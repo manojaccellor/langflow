@@ -1,0 +1,129 @@
+"""
+{{ flow_name }} FastAPI Application
+Generated from Langflow
+"""
+
+from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+import asyncio
+import json
+import time
+import uvicorn
+from typing import Dict, Any, Optional
+
+from app.flow import load_flow_from_json
+
+# Initialize FastAPI app
+app = FastAPI(
+    title="{{ flow_name }}",
+    description="{{ flow_description }}",
+    version="1.0.0",
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Load the flow
+flow_graph = load_flow_from_json()
+
+# Store active sessions
+sessions = {}
+
+@app.get("/")
+async def root():
+    """Root endpoint that returns basic information about the API."""
+    return {
+        "name": "{{ flow_name }}",
+        "description": "{{ flow_description }}",
+        "endpoints": [
+            {"path": "/", "method": "GET", "description": "This information"},
+            {"path": "/run", "method": "POST", "description": "Run the flow with input"},
+            {"path": "/stream", "method": "POST", "description": "Run the flow with streaming response"},
+            {"path": "/health", "method": "GET", "description": "Health check endpoint"}
+        ]
+    }
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    return {"status": "ok"}
+
+@app.post("/run")
+async def run_flow(request: Request):
+    """Run the flow with the provided input."""
+    try:
+        # Parse the request body
+        body = await request.json()
+        
+        # Extract input from request
+        input_value = body.get("input", "")
+        input_type = body.get("input_type", "text")
+        session_id = body.get("session_id")
+        
+        # Process tweaks if provided
+        tweaks = body.get("tweaks", {})
+        
+        # Run the flow
+        result = await flow_graph.process(
+            input_value=input_value,
+            input_type=input_type,
+            tweaks=tweaks,
+            session_id=session_id
+        )
+        
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def stream_generator(queue):
+    """Generate streaming response from queue."""
+    while True:
+        data = await queue.get()
+        if data is None:  # Signal to stop
+            break
+        yield f"data: {json.dumps(data)}\n\n"
+
+@app.post("/stream")
+async def stream_flow(request: Request, background_tasks: BackgroundTasks):
+    """Run the flow with streaming response."""
+    try:
+        # Parse the request body
+        body = await request.json()
+        
+        # Extract input from request
+        input_value = body.get("input", "")
+        input_type = body.get("input_type", "text")
+        session_id = body.get("session_id")
+        
+        # Process tweaks if provided
+        tweaks = body.get("tweaks", {})
+        
+        # Create queue for streaming
+        queue = asyncio.Queue()
+        
+        # Run the flow in the background
+        background_tasks.add_task(
+            flow_graph.process_stream,
+            queue=queue,
+            input_value=input_value,
+            input_type=input_type,
+            tweaks=tweaks,
+            session_id=session_id
+        )
+        
+        return StreamingResponse(
+            stream_generator(queue),
+            media_type="text/event-stream"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True) 

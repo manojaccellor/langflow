@@ -4,11 +4,11 @@ import asyncio
 import time
 from collections.abc import AsyncGenerator
 from http import HTTPStatus
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Dict, Optional
 from uuid import UUID
 
 import sqlalchemy as sa
-from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query, Request, UploadFile, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, StreamingResponse
 from loguru import logger
@@ -17,7 +17,7 @@ import tempfile
 import shutil
 import json
 import os
-from langflow.utils.deploy import generate_fastapi_app, create_zip_file
+from langflow.utils.deploy import generate_fastapi_app, create_zip_file, build_docker_image, deploy_container
 from langflow.api.utils import CurrentActiveUser, DbSession, parse_value
 from langflow.api.v1.schemas import (
     ConfigResponse,
@@ -762,12 +762,13 @@ async def get_config():
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@router.post("/flows/{flow_id}/deploy", status_code=status.HTTP_200_OK)
-async def deploy_flow(
+@router.get("/flows/{flow_id_or_name}/deploy", response_class=FileResponse)
+async def deploy_flow_get(
+    flow_id_or_name: str,
     flow: Annotated[Flow, Depends(get_flow_by_id_or_endpoint_name)],
     user: CurrentActiveUser,
 ):
-    """Deploy a flow as a standalone FastAPI application.
+    """Deploy a flow as a standalone FastAPI application using GET method.
 
     This endpoint generates a deployable FastAPI application from a flow.
 
@@ -776,10 +777,170 @@ async def deploy_flow(
         user (User): The authenticated user
 
     Returns:
-        dict: A dictionary containing the path to the deployed application
+        FileResponse: A zip file containing the FastAPI application
 
     Raises:
         HTTPException: If there is an error deploying the flow
+    """
+    try:
+        # Create a temporary directory for the deployment
+        temp_dir = tempfile.mkdtemp()
+        print(f"Created temporary directory: {temp_dir}")
+
+        try:
+            # Generate the FastAPI application
+            app_path = generate_fastapi_app(flow, temp_dir)
+            print(f"Generated FastAPI app at: {app_path}")
+
+            # Create a zip file of the application
+            zip_path = create_zip_file(app_path)
+            print(f"Created zip file at: {zip_path}")
+
+            # Return the download URL for the zip file
+            return FileResponse(
+                path=zip_path, 
+                filename=f"{flow.name}_fastapi_app.zip", 
+                media_type="application/zip"
+            )
+        except Exception as inner_exc:
+            # Log the detailed error
+            logger.exception(f"Error in deploy_flow: {str(inner_exc)}")
+            # Clean up the temporary directory in case of error
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            # Re-raise with more details
+            raise ValueError(f"Error generating FastAPI app: {str(inner_exc)}") from inner_exc
+    except ValueError as exc:
+        # Specific handling for known errors
+        logger.exception(f"ValueError in deploy_flow: {str(exc)}")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, 
+            detail=f"Error deploying flow: {str(exc)}"
+        ) from exc
+    except Exception as exc:
+        # Generic error handling
+        logger.exception(f"Error deploying flow: {str(exc)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+            detail=f"Error deploying flow: {str(exc)}"
+        ) from exc
+
+@router.post("/flows/{flow_id_or_name}/containerize", status_code=status.HTTP_200_OK)
+async def containerize_flow(
+    flow_id_or_name: str,
+    flow: Annotated[Flow, Depends(get_flow_by_id_or_endpoint_name)],
+    user: CurrentActiveUser,
+    request: Request,
+):
+    """Containerize a flow as a Docker container.
+
+    This endpoint generates a Docker container from a flow and optionally deploys it.
+    It accepts parameters from the request body.
+
+    Args:
+        flow (Flow): The flow to containerize
+        user (User): The authenticated user
+        request (Request): The request object
+
+    Returns:
+        dict: A dictionary containing information about the containerized flow
+
+    Raises:
+        HTTPException: If there is an error containerizing the flow
+    """
+    try:
+        # Get parameters from request body
+        try:
+            body = await request.json()
+            port = body.get("port", 8000)
+            auto_deploy = body.get("auto_deploy", False)
+        except:
+            # Default values if body parsing fails
+            port = 8000
+            auto_deploy = False
+            
+        print(f"Containerizing flow with port={port}, auto_deploy={auto_deploy}")
+        
+        # Create a temporary directory for the deployment
+        temp_dir = tempfile.mkdtemp()
+        print(f"Created temporary directory for containerization: {temp_dir}")
+        
+        image_name = f"langflow-{flow.name.lower().replace(' ', '-')}"
+        container_name = f"{image_name}-container"
+
+        # Generate the FastAPI application
+        app_path = generate_fastapi_app(flow, temp_dir)
+        print(f"Generated FastAPI app for containerization at: {app_path}")
+
+        # Build the Docker image
+        success, message = build_docker_image(app_path, image_name)
+        print(f"Docker build result: {success}, {message}")
+        
+        if not success:
+            raise ValueError(message)
+        
+        result = {
+            "flow_id": str(flow.id),
+            "flow_name": flow.name,
+            "image_name": image_name,
+            "message": message,
+            "container_info": None
+        }
+        
+        # Deploy the container if requested
+        if auto_deploy:
+            print(f"Auto-deploying container on port {port}")
+            deploy_success, deploy_message, container_info = deploy_container(
+                image_name=image_name,
+                container_name=container_name,
+                port=port
+            )
+            print(f"Container deployment result: {deploy_success}, {deploy_message}")
+            
+            if not deploy_success:
+                result["deploy_error"] = deploy_message
+            else:
+                result["container_info"] = container_info
+                result["message"] = f"{message}. {deploy_message}"
+
+        # Create a zip file of the application for download
+        zip_path = create_zip_file(app_path)
+        result["download_url"] = f"/api/v1/flows/{flow.id}/download-app"
+        
+        # Store the zip path in a temporary file for later download
+        with open(os.path.join(temp_dir, "zip_path.txt"), "w") as f:
+            f.write(zip_path)
+        
+        # Store the temp directory path for cleanup
+        with open(os.path.join(temp_dir, "temp_dir.txt"), "w") as f:
+            f.write(temp_dir)
+        
+        return result
+    except Exception as exc:
+        # Clean up the temporary directory in case of error
+        if "temp_dir" in locals():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        logger.exception(f"Error containerizing flow: {str(exc)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error containerizing flow: {str(exc)}"
+        ) from exc
+
+@router.get("/flows/{flow_id_or_name}/download-app", status_code=status.HTTP_200_OK)
+async def download_app(
+    flow_id_or_name: str,
+    flow: Annotated[Flow, Depends(get_flow_by_id_or_endpoint_name)],
+    user: CurrentActiveUser,
+):
+    """Download the FastAPI application for a flow.
+
+    Args:
+        flow (Flow): The flow to download
+        user (User): The authenticated user
+
+    Returns:
+        FileResponse: The zip file containing the FastAPI application
+
+    Raises:
+        HTTPException: If there is an error downloading the application
     """
     try:
         # Create a temporary directory for the deployment
@@ -798,5 +959,67 @@ async def deploy_flow(
         if "temp_dir" in locals():
             shutil.rmtree(temp_dir, ignore_errors=True)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error deploying flow: {str(exc)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error downloading application: {str(exc)}"
+        ) from exc
+
+@router.post("/flows/{flow_id_or_name}/deploy", response_class=FileResponse)
+async def deploy_flow_post(
+    flow_id_or_name: str,
+    flow: Annotated[Flow, Depends(get_flow_by_id_or_endpoint_name)],
+    user: CurrentActiveUser,
+):
+    """Deploy a flow as a standalone FastAPI application using POST method.
+
+    This endpoint generates a deployable FastAPI application from a flow.
+
+    Args:
+        flow (Flow): The flow to deploy
+        user (User): The authenticated user
+
+    Returns:
+        FileResponse: A zip file containing the FastAPI application
+
+    Raises:
+        HTTPException: If there is an error deploying the flow
+    """
+    try:
+        # Create a temporary directory for the deployment
+        temp_dir = tempfile.mkdtemp()
+        print(f"Created temporary directory: {temp_dir}")
+
+        try:
+            # Generate the FastAPI application
+            app_path = generate_fastapi_app(flow, temp_dir)
+            print(f"Generated FastAPI app at: {app_path}")
+
+            # Create a zip file of the application
+            zip_path = create_zip_file(app_path)
+            print(f"Created zip file at: {zip_path}")
+
+            # Return the download URL for the zip file
+            return FileResponse(
+                path=zip_path, 
+                filename=f"{flow.name}_fastapi_app.zip", 
+                media_type="application/zip"
+            )
+        except Exception as inner_exc:
+            # Log the detailed error
+            logger.exception(f"Error in deploy_flow: {str(inner_exc)}")
+            # Clean up the temporary directory in case of error
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            # Re-raise with more details
+            raise ValueError(f"Error generating FastAPI app: {str(inner_exc)}") from inner_exc
+    except ValueError as exc:
+        # Specific handling for known errors
+        logger.exception(f"ValueError in deploy_flow: {str(exc)}")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, 
+            detail=f"Error deploying flow: {str(exc)}"
+        ) from exc
+    except Exception as exc:
+        # Generic error handling
+        logger.exception(f"Error deploying flow: {str(exc)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+            detail=f"Error deploying flow: {str(exc)}"
         ) from exc

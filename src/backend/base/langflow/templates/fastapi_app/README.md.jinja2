@@ -1,0 +1,66 @@
+# {{ flow_name }}
+
+{{ flow_description }}
+
+This is a FastAPI application generated from a Langflow flow.
+
+## Getting Started
+
+### Running with Docker
+
+The easiest way to run this application is with Docker:
+
+```bash
+# Build the Docker image
+docker build -t {{ flow_name | lower | replace(" ", "-") }} .
+
+# Run the container
+docker run -d -p 8000:8000 --name {{ flow_name | lower | replace(" ", "-") }}-container {{ flow_name | lower | replace(" ", "-") }}
+```
+
+The API will be available at http://localhost:8000
+
+### Running locally
+
+If you prefer to run the application locally:
+
+1. Create a virtual environment:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+3. Run the application:
+```bash
+uvicorn app.main:app --reload
+```
+
+## API Endpoints
+
+- `GET /`: Get API information
+- `GET /health`: Health check endpoint
+- `POST /run`: Run the flow with input
+- `POST /stream`: Run the flow with streaming response
+
+### Example usage
+
+```bash
+# Basic request
+curl -X POST http://localhost:8000/run \
+  -H "Content-Type: application/json" \
+  -d '{"input": "Your input text here", "input_type": "text"}'
+
+# Streaming request
+curl -X POST http://localhost:8000/stream \
+  -H "Content-Type: application/json" \
+  -d '{"input": "Your input text here", "input_type": "text"}'
+```
+
+## License
+
+This project is generated from Langflow. 
